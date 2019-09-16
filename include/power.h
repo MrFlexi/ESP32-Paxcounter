@@ -11,11 +11,13 @@
 
 #ifdef HAS_PMU
 #include <axp20x.h>
+void pover_event_IRQ(void);
+void AXP192_power(bool on);
 #endif
 
 void AXP192_init(void);
 uint16_t read_voltage(void);
 void calibrate_voltage(void);
-uint8_t getBattLevel (void);
+uint8_t getBattLevel(void);
 
 #endif

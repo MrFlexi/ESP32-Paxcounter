@@ -9,6 +9,71 @@ static const char TAG[] = __FILE__;
 
 AXP20X_Class pmu;
 
+void pover_event_IRQ(void) {
+  // block i2c bus access
+  if (I2C_MUTEX_LOCK()) {
+    pmu.readIRQ();
+    // put your power event handler code here
+
+    if (pmu.isVbusOverVoltageIRQ())
+      ESP_LOGI(TAG, "USB voltage too high.");
+    if (pmu.isVbusPlugInIRQ())
+      ESP_LOGI(TAG, "USB plugged.");
+    if (pmu.isVbusRemoveIRQ())
+      ESP_LOGI(TAG, "USB unplugged.");
+
+    if (pmu.isBattPlugInIRQ())
+      ESP_LOGI(TAG, "Battery is connected.");
+    if (pmu.isBattRemoveIRQ())
+      ESP_LOGI(TAG, "Battery was removed.");
+    if (pmu.isChargingIRQ())
+      ESP_LOGI(TAG, "Battery is charging.");
+    if (pmu.isChargingDoneIRQ())
+      ESP_LOGI(TAG, "Battery charging done.");
+    if (pmu.isBattTempLowIRQ())
+      ESP_LOGI(TAG, "Battery high temperature.");
+    if (pmu.isBattTempHighIRQ())
+      ESP_LOGI(TAG, "Battery low temperature.");
+
+    // wake up
+    if (pmu.isPEKShortPressIRQ()) {
+      ESP_LOGI(TAG, "Power Button short pressed.");
+      AXP192_power(true);
+    }
+    // enter sleep mode
+    if (pmu.isPEKLongtPressIRQ()) {
+      ESP_LOGI(TAG, "Power Button long pressed.");
+      AXP192_power(false);
+      delay(20);
+      esp_sleep_enable_ext1_wakeup(GPIO_SEL_38, ESP_EXT1_WAKEUP_ALL_LOW);
+      esp_deep_sleep_start();
+    }
+
+    pmu.clearIRQ();
+    I2C_MUTEX_UNLOCK(); // release i2c bus access
+  } else
+    ESP_LOGI(TAG, "Unknown PMU event.");
+}
+
+void AXP192_power(bool on) {
+
+  if (on) {
+    pmu.setPowerOutPut(AXP192_LDO2, AXP202_ON);
+    pmu.setPowerOutPut(AXP192_LDO3, AXP202_ON);
+    pmu.setPowerOutPut(AXP192_DCDC2, AXP202_ON);
+    pmu.setPowerOutPut(AXP192_EXTEN, AXP202_ON);
+    pmu.setPowerOutPut(AXP192_DCDC1, AXP202_ON);
+    pmu.setChgLEDMode(AXP20X_LED_LOW_LEVEL);
+  } else {
+    pmu.setPowerOutPut(AXP192_DCDC1, AXP202_OFF);
+    pmu.setPowerOutPut(AXP192_EXTEN, AXP202_OFF);
+    pmu.setPowerOutPut(AXP192_DCDC2, AXP202_OFF);
+    pmu.setPowerOutPut(AXP192_LDO3, AXP202_OFF);
+    pmu.setPowerOutPut(AXP192_LDO2, AXP202_OFF);
+    pmu.setChgLEDMode(AXP20X_LED_OFF);
+  }
+}
+
 void AXP192_init(void) {
 
   // block i2c bus access
@@ -18,34 +83,22 @@ void AXP192_init(void) {
       ESP_LOGI(TAG, "AXP192 PMU initialization failed");
     else {
 
-      pmu.setPowerOutPut(AXP192_LDO2, AXP202_ON);
-      pmu.setPowerOutPut(AXP192_LDO3, AXP202_ON);
-      pmu.setPowerOutPut(AXP192_DCDC2, AXP202_ON);
-      pmu.setPowerOutPut(AXP192_EXTEN, AXP202_ON);
-      pmu.setPowerOutPut(AXP192_DCDC1, AXP202_ON);
+      // switch power on
       pmu.setDCDC1Voltage(3300);
-      pmu.setChgLEDMode(AXP20X_LED_LOW_LEVEL);
       pmu.adc1Enable(AXP202_BATT_CUR_ADC1, 1);
+      AXP192_power(true);
 
-      /*
-        // I2C access of AXP202X library currently is not mutexable
-        // so we need to disable AXP interrupts
-        
+      // I2C access of AXP202X library currently is not mutexable
+      // so we need to disable AXP interrupts
 
-        #ifdef PMU_INT
-            pinMode(PMU_INT, INPUT_PULLUP);
-            attachInterrupt(digitalPinToInterrupt(PMU_INT),
-                            [] {
-                              ESP_LOGI(TAG, "Power source changed");
-                              // put your code here
-                            },
-                            FALLING);
-            pmu.enableIRQ(AXP202_VBUS_REMOVED_IRQ | AXP202_VBUS_CONNECT_IRQ |
-                              AXP202_BATT_REMOVED_IRQ | AXP202_BATT_CONNECT_IRQ,
-                          1);
-            pmu.clearIRQ();
-        #endif // PMU_INT
-        */
+#ifdef PMU_INT
+      pinMode(PMU_INT, INPUT_PULLUP);
+      attachInterrupt(digitalPinToInterrupt(PMU_INT), PMUIRQ, FALLING);
+      pmu.enableIRQ(AXP202_VBUS_REMOVED_IRQ | AXP202_VBUS_CONNECT_IRQ |
+                        AXP202_BATT_REMOVED_IRQ | AXP202_BATT_CONNECT_IRQ,
+                    1);
+      pmu.clearIRQ();
+#endif // PMU_INT
 
       ESP_LOGI(TAG, "AXP192 PMU initialized.");
 
