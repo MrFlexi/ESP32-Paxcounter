@@ -1,10 +1,12 @@
 #ifndef _DCF77_H
 #define _DCF77_H
 
-#include "globals.h"
+#ifdef HAS_DCF77
 
-#define DCF77_FRAME_SIZE (60)
-#define DCF77_PULSE_LENGTH (100)
+#include "globals.h"
+#include "timekeeper.h"
+
+#define set_dcfbit(b) (1ULL << (b))
 
 #ifdef DCF77_ACTIVE_LOW
 enum dcf_pinstate { dcf_high, dcf_low };
@@ -12,12 +14,9 @@ enum dcf_pinstate { dcf_high, dcf_low };
 enum dcf_pinstate { dcf_low, dcf_high };
 #endif
 
-enum DCF77_Pulses { dcf_Z, dcf_0, dcf_1 };
+void DCF77_Pulse(uint8_t bit);
+uint64_t DCF77_Frame(const struct tm t);
 
-void DCF77_Pulse(time_t t, uint8_t const *DCFpulse);
-uint8_t *IRAM_ATTR DCF77_Frame(time_t const t);
-uint8_t IRAM_ATTR dec2bcd(uint8_t const dec, uint8_t const startpos, uint8_t const endpos,
-                          uint8_t *DCFpulse);
-uint8_t IRAM_ATTR setParityBit(uint8_t const p);
+#endif
 
 #endif

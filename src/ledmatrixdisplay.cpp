@@ -1,17 +1,19 @@
 #ifdef HAS_MATRIX_DISPLAY
 
 #include "globals.h"
+#include "ledmatrixdisplay.h"
 
 #define MATRIX_DISPLAY_PAGES (2) // number of display pages
 #define LINE_DIAGRAM_DIVIDER (2) // scales pax numbers to led rows
 
-// local Tag for logging
-static const char TAG[] = __FILE__;
 
 uint8_t MatrixDisplayIsOn = 0;
 static uint8_t displaybuf[LED_MATRIX_WIDTH * LED_MATRIX_HEIGHT / 8] = {0};
 static unsigned long ulLastNumMacs = 0;
-static time_t ulLastTime = myTZ.toLocal(now());
+static time_t ulLastTime = time(NULL);
+static struct count_payload_t count; // libpax count storage
+
+hw_timer_t *matrixDisplayIRQ = NULL;
 
 LEDMatrix matrix(LED_MATRIX_LA_74138, LED_MATRIX_LB_74138, LED_MATRIX_LC_74138,
                  LED_MATRIX_LD_74138, LED_MATRIX_EN_74138, LED_MATRIX_DATA_R1,
@@ -39,12 +41,11 @@ void init_matrix_display(bool reverse) {
     matrix.reverse();
   matrix.clear();
   matrix.drawPoint(0, LED_MATRIX_HEIGHT - 1, 1);
-} // init_display
+} // dp_init
 
 void refreshTheMatrixDisplay(bool nextPage) {
   static uint8_t DisplayPage = 0, col = 0, row = 0;
   uint8_t level;
-  char buff[16];
 
   // if Matrixdisplay is switched off we don't refresh it to relax cpu
   if (!MatrixDisplayIsOn && (MatrixDisplayIsOn == cfg.screenon))
@@ -67,40 +68,37 @@ void refreshTheMatrixDisplay(bool nextPage) {
   }
 
   switch (DisplayPage % MATRIX_DISPLAY_PAGES) {
-
     // page 0: number of current pax OR footfall line diagram
     // page 1: time of day
 
   case 0:
 
-    if (cfg.countermode == 1)
+    // update counter values from libpax
+    libpax_counter_count(&count);
 
-    { // cumulative counter mode -> display total number of pax
-      if (ulLastNumMacs != macs.size()) {
-        ulLastNumMacs = macs.size();
+    if (cfg.countermode == 1) {
+      // cumulative counter mode -> display total number of pax
+      if (ulLastNumMacs != count.pax) {
+        ulLastNumMacs = count.pax;
         matrix.clear();
         DrawNumber(String(ulLastNumMacs));
       }
     }
 
     else { // cyclic counter mode -> plot a line diagram
-
-      if (ulLastNumMacs != macs.size()) {
-
+      if (ulLastNumMacs != count.pax) {
         // next count cycle?
-        if (macs.size() == 0) {
-
+        if (count.pax == 0) {
           // matrix full? then scroll left 1 dot, else increment column
           if (col < (LED_MATRIX_WIDTH - 1))
             col++;
           else
             ScrollMatrixLeft(displaybuf, LED_MATRIX_WIDTH, LED_MATRIX_HEIGHT);
-
         } else
           matrix.drawPoint(col, row, 0); // clear current dot
 
         // scale and set new dot
-        ulLastNumMacs = macs.size();
+        ulLastNumMacs = count.pax;
         level = ulLastNumMacs / LINE_DIAGRAM_DIVIDER;
         row = level <= LED_MATRIX_HEIGHT
                   ? LED_MATRIX_HEIGHT - 1 - level % LED_MATRIX_HEIGHT
@@ -112,16 +110,13 @@ void refreshTheMatrixDisplay(bool nextPage) {
 
   case 1:
 
-    const time_t t = myTZ.toLocal(now());
+    const time_t t = time(NULL);
     if (ulLastTime != t) {
       ulLastTime = t;
       matrix.clear();
-      snprintf(buff, sizeof(buff), "%02d:%02d:%02d", hour(t), minute(t),
-               second(t));
-      DrawNumber(String(buff));
+      // DrawNumber(myTZ.dateTime("H:i:s").c_str());
     }
     break;
-
   } // switch page
 
   matrix.scan();
@@ -205,7 +200,7 @@ uint8_t GetCharWidth(char cChar) {
 }
 
 void ScrollMatrixLeft(uint8_t *buf, const uint16_t cols, const uint16_t rows) {
-  uint32_t i, k, idx;
+  uint32_t i, k, idx = 0;
   const uint32_t x = cols / 8;
 
   for (k = 0; k < rows; k++) {

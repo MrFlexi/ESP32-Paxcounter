@@ -1,20 +1,21 @@
 // Basic Config
 #include "senddata.h"
 
-Ticker sendcycler;
+// void setSendIRQ(TimerHandle_t xTimer) {
+//  xTaskNotify(irqHandlerTask, SENDCYCLE_IRQ, eSetBits);
+//}
 
-void sendcycle() {
-  xTaskNotifyFromISR(irqHandlerTask, SENDCYCLE_IRQ, eSetBits, NULL);
-}
+// void setSendIRQ(void) { setSendIRQ(NULL); }
+
+void setSendIRQ(void) { xTaskNotify(irqHandlerTask, SENDCYCLE_IRQ, eSetBits); }
 
 // put data to send in RTos Queues used for transmit over channels Lora and SPI
-void SendPayload(uint8_t port, sendprio_t prio) {
+void SendPayload(uint8_t port) {
+  ESP_LOGD(TAG, "sending Payload for Port %d", port);
 
-  MessageBuffer_t
-      SendBuffer; // contains MessageSize, MessagePort, MessagePrio, Message[]
+  MessageBuffer_t SendBuffer; // contains MessageSize, MessagePort, Message[]
 
   SendBuffer.MessageSize = payload.getSize();
-  SendBuffer.MessagePrio = prio;
 
   switch (PAYLOAD_ENCODER) {
   case 1: // plain -> no mapping
@@ -50,98 +51,161 @@ void SendPayload(uint8_t port, sendprio_t prio) {
 #ifdef HAS_SPI
   spi_enqueuedata(&SendBuffer);
 #endif
-
+#ifdef HAS_MQTT
+  mqtt_enqueuedata(&SendBuffer);
+#endif
 } // SendPayload
 
-// interrupt triggered function to prepare payload to send
+// timer triggered function to prepare payload to send
 void sendData() {
-
   uint8_t bitmask = cfg.payloadmask;
   uint8_t mask = 1;
 
+#if (HAS_GPS)
+  gpsStatus_t gps_status;
+#endif
+#if (HAS_SDS011)
+  sdsStatus_t sds_status;
+#endif
+  struct count_payload_t count =
+      count_from_libpax; // copy values from global libpax var
+  ESP_LOGD(TAG, "Sending count results: pax=%d / wifi=%d / ble=%d", count.pax,
+           count.wifi_count, count.ble_count);
+
   while (bitmask) {
     switch (bitmask & mask) {
-
-#if ((WIFICOUNTER) || (BLECOUNTER))
     case COUNT_DATA:
       payload.reset();
-      payload.addCount(macs_wifi, MAC_SNIFF_WIFI);
+
+#if !(PAYLOAD_OPENSENSEBOX)
+      payload.addCount(count.wifi_count, MAC_SNIFF_WIFI);
       if (cfg.blescan)
-        payload.addCount(macs_ble, MAC_SNIFF_BLE);
-      SendPayload(COUNTERPORT, prio_normal);
-      // clear counter if not in cumulative counter mode
-      if (cfg.countermode != 1) {
-        reset_counters(); // clear macs container and reset all counters
-        get_salt();       // get new salt for salting hashes
-        ESP_LOGI(TAG, "Counter cleared");
+        payload.addCount(count.ble_count, MAC_SNIFF_BLE);
+#endif
+
+#if (HAS_GPS)
+      if (GPSPORT == COUNTERPORT) {
+        // send GPS position only if we have a fix
+        if (gps_hasfix()) {
+          if (gps_storelocation(&gps_status)) {
+            payload.addGPS(gps_status);
+          }
+        } else
+          ESP_LOGD(TAG, "No valid GPS position");
       }
+#endif
+
+#if (PAYLOAD_OPENSENSEBOX)
+      payload.addCount(count.wifi_count, MAC_SNIFF_WIFI);
+      if (cfg.blescan)
+        payload.addCount(count.ble_count, MAC_SNIFF_BLE);
+#endif
+
+#if (HAS_SDS011)
+      sds011_store(&sds_status);
+      payload.addSDS(sds_status);
+#endif
+
 #ifdef HAS_DISPLAY
-      else
-        oledPlotCurve(macs.size(), true);
+      dp_plotCurve(count.pax, true);
 #endif
-      break;
+
+#if (HAS_SDCARD)
+      sdcardWriteData(count.wifi_count, count.ble_count
+#if (defined BAT_MEASURE_ADC || defined HAS_PMU)
+                      ,
+                      read_voltage()
 #endif
+      );
+#endif // HAS_SDCARD
+
+      SendPayload(COUNTERPORT);
+      break; // case COUNTDATA
 
 #if (HAS_BME)
     case MEMS_DATA:
       payload.reset();
       payload.addBME(bme_status);
-      SendPayload(BMEPORT, prio_normal);
+      SendPayload(BMEPORT);
       break;
 #endif
 
 #if (HAS_GPS)
     case GPS_DATA:
-      // send GPS position only if we have a fix
-      if (gps.location.isValid()) {
-        gpsStatus_t gps_status;
-        gps_storelocation(&gps_status);
-        payload.reset();
-        payload.addGPS(gps_status);
-        SendPayload(GPSPORT, prio_high);
-      } else
-        ESP_LOGD(TAG, "No valid GPS position");
+      if (GPSPORT != COUNTERPORT) {
+        // send GPS position only if we have a fix
+        if (gps_hasfix()) {
+          if (gps_storelocation(&gps_status)) {
+            payload.reset();
+            payload.addGPS(gps_status);
+            SendPayload(GPSPORT);
+          }
+        } else
+          ESP_LOGD(TAG, "No valid GPS position");
+      }
       break;
 #endif
 
 #if (HAS_SENSORS)
+#if (HAS_SENSOR_1)
     case SENSOR1_DATA:
       payload.reset();
       payload.addSensor(sensor_read(1));
-      SendPayload(SENSOR1PORT, prio_normal);
+      SendPayload(SENSOR1PORT);
       break;
+#endif
+#if (HAS_SENSOR_2)
     case SENSOR2_DATA:
       payload.reset();
       payload.addSensor(sensor_read(2));
-      SendPayload(SENSOR2PORT, prio_normal);
+      SendPayload(SENSOR2PORT);
       break;
+#endif
+#if (HAS_SENSOR_3)
     case SENSOR3_DATA:
       payload.reset();
       payload.addSensor(sensor_read(3));
-      SendPayload(SENSOR3PORT, prio_normal);
+      SendPayload(SENSOR3PORT);
       break;
+#endif
 #endif
 
 #if (defined BAT_MEASURE_ADC || defined HAS_PMU)
     case BATT_DATA:
       payload.reset();
       payload.addVoltage(read_voltage());
-      SendPayload(BATTPORT, prio_normal);
+      SendPayload(BATTPORT);
       break;
 #endif
-
     } // switch
     bitmask &= ~mask;
     mask <<= 1;
   } // while (bitmask)
-
 } // sendData()
 
-void flushQueues() {
+void flushQueues(void) {
+  rcmd_queuereset();
 #if (HAS_LORA)
   lora_queuereset();
 #endif
 #ifdef HAS_SPI
   spi_queuereset();
 #endif
+#ifdef HAS_MQTT
+  mqtt_queuereset();
+#endif
+}
+
+bool allQueuesEmtpy(void) {
+  uint32_t rc = rcmd_queuewaiting();
+#if (HAS_LORA)
+  rc += lora_queuewaiting();
+#endif
+#ifdef HAS_SPI
+  rc += spi_queuewaiting();
+#endif
+#ifdef HAS_MQTT
+  rc += mqtt_queuewaiting();
+#endif
+  return (rc == 0) ? true : false;
 }

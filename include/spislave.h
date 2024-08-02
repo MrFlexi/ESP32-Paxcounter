@@ -24,11 +24,19 @@ licenses. Refer to LICENSE.txt file in repository for more details.
 #ifndef _SPISLAVE_H
 #define _SPISLAVE_H
 
+#ifdef HAS_SPI
+
 #include "globals.h"
+#include "rcommand.h"
+
+extern TaskHandle_t spiTask;
 
 esp_err_t spi_init();
-
+void spi_deinit(void);
 void spi_enqueuedata(MessageBuffer_t *message);
-void spi_queuereset();
+uint32_t spi_queuewaiting(void);
+void spi_queuereset(void);
+
+#endif
 
 #endif // _SPISLAVE_H

@@ -2,22 +2,20 @@
 #define _SENDDATA_H
 
 #include "spislave.h"
+#include "mqttclient.h"
 #include "cyclic.h"
-
-#if(HAS_LORA)
+#include "sensor.h"
 #include "lorawan.h"
-#endif
-
-#ifdef HAS_DISPLAY
 #include "display.h"
-#endif
+#include "sdcard.h"
+#include "payload.h"
 
-extern Ticker sendcycler;
-
-void SendPayload(uint8_t port, sendprio_t prio);
+void SendPayload(uint8_t port);
 void sendData(void);
 void checkSendQueues(void);
-void flushQueues();
-void sendcycle(void);
+void flushQueues(void);
+bool allQueuesEmtpy(void);
+//void setSendIRQ(TimerHandle_t xTimer);
+void setSendIRQ(void);
 
 #endif // _SENDDATA_H_

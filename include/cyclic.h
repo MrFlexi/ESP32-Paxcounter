@@ -5,25 +5,20 @@
 #include "senddata.h"
 #include "rcommand.h"
 #include "spislave.h"
-
-#if(HAS_LORA)
-#include <lmic.h>
-#endif
-
-#if (HAS_BME)
+#include "mqttclient.h"
 #include "bmesensor.h"
-#endif
-
-#ifdef HAS_DISPLAY
 #include "display.h"
-#endif
+#include "sds011read.h"
+#include "sdcard.h"
+#include "reset.h"
+#include "led.h"
+#include "power.h"
+#include "button.h"
 
-extern Ticker housekeeper;
+extern Ticker cyclicTimer;
 
-void housekeeping(void);
+void setCyclicIRQ(void);
 void doHousekeeping(void);
-uint64_t uptime(void);
-void reset_counters(void);
 uint32_t getFreeRAM();
 
 #endif

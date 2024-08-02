@@ -1,3 +1,5 @@
+#if (HAS_LORA)
+
 #ifndef _LORAWAN_H
 #define _LORAWAN_H
 
@@ -5,9 +7,6 @@
 #include "rcommand.h"
 #include "timekeeper.h"
 #include <driver/rtc_io.h>
-#if (TIME_SYNC_LORASERVER)
-#include "timesync.h"
-#endif
 
 // LMIC-Arduino LoRaWAN Stack
 #include <lmic.h>
@@ -22,16 +21,12 @@
 #endif
 
 extern TaskHandle_t lmicTask, lorasendTask;
+extern char lmic_event_msg[LMIC_EVENTMSG_LEN]; // display buffer
 
-// table of LORAWAN MAC commands
-typedef struct {
-  const uint8_t opcode;
-  const char cmdname[20];
-  const uint8_t params;
-} mac_t;
-
-esp_err_t lora_stack_init(bool do_join);
+esp_err_t lmic_init(void);
 void lora_setupForNetwork(bool preJoin);
+void SaveLMICToRTC(uint32_t deepsleep_sec);
+void LoadLMICFromRTC();
 void lmictask(void *pvParameters);
 void gen_lora_deveui(uint8_t *pdeveui);
 void RevBytes(unsigned char *b, size_t c);
@@ -39,24 +34,23 @@ void get_hard_deveui(uint8_t *pdeveui);
 void os_getDevKey(u1_t *buf);
 void os_getArtEui(u1_t *buf);
 void os_getDevEui(u1_t *buf);
-void showLoraKeys(void);
 void lora_send(void *pvParameters);
 void lora_enqueuedata(MessageBuffer_t *message);
 void lora_queuereset(void);
-static void IRAM_ATTR myEventCallback(void *pUserData, ev_t ev);
-static void IRAM_ATTR myRxCallback(void *pUserData, uint8_t port,
-                                   const uint8_t *pMsg, size_t nMsg);
-static void IRAM_ATTR myTxCallback(void *pUserData, int fSuccess);
-void mac_decode(const uint8_t cmd[], const uint8_t cmdlen, const mac_t table[],
-                const uint8_t tablesize);
-uint8_t getBattLevel(void);
+void lora_waitforidle(uint16_t timeout_sec);
+uint32_t lora_queuewaiting(void);
+void myEventCallback(void *pUserData, ev_t ev);
+void myRxCallback(void *pUserData, uint8_t port, const uint8_t *pMsg,
+                            size_t nMsg);
+void myTxCallback(void *pUserData, int fSuccess);
 const char *getSfName(rps_t rps);
 const char *getBwName(rps_t rps);
 const char *getCrName(rps_t rps);
 
-#if (TIME_SYNC_LORAWAN)
-void user_request_network_time_callback(void *pVoidUserUTCTime,
-                                               int flagSuccess);
-#endif
+#if (VERBOSE)
+void showLoraKeys(void);
+#endif // VERBOSE
 
 #endif
+
+#endif // HAS_LORA

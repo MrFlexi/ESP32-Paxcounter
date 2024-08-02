@@ -1,7 +1,9 @@
 #ifndef _PAYLOAD_H_
 #define _PAYLOAD_H_
 
-#include "paxcounter.conf"
+#include "sensor.h"
+#include "sds011read.h"
+#include "gpsread.h"
 
 // MyDevices CayenneLPP 1.0 channels for Synamic sensor payload format
 // all payload goes out on LoRa FPort 1
@@ -19,6 +21,8 @@
 #define LPP_HUMIDITY_CHANNEL 29
 #define LPP_BAROMETER_CHANNEL 30
 #define LPP_AIR_CHANNEL 31
+#define LPP_PARTMATTER10_CHANNEL 32    // particular matter for PM 10
+#define LPP_PARTMATTER25_CHANNEL 33    // particular matter for PM 2.5
 
 // MyDevices CayenneLPP 2.0 types for Packed Sensor Payload, not using channels,
 // but different FPorts
@@ -35,7 +39,6 @@
 #endif
 
 class PayloadConvert {
-
 public:
   PayloadConvert(uint8_t size);
   ~PayloadConvert();
@@ -47,14 +50,17 @@ public:
   void addCount(uint16_t value, uint8_t sniffytpe);
   void addConfig(configData_t value);
   void addStatus(uint16_t voltage, uint64_t uptime, float cputemp, uint32_t mem,
-                 uint8_t reset1, uint8_t reset2);
-  void addAlarm(int8_t rssi, uint8_t message);
+                 uint8_t reset0, uint32_t restarts);
   void addVoltage(uint16_t value);
   void addGPS(gpsStatus_t value);
   void addBME(bmeStatus_t value);
   void addButton(uint8_t value);
   void addSensor(uint8_t[]);
   void addTime(time_t value);
+  void addSDS(sdsStatus_t value);
+
+private:
+  void addChars( char* string, int len);
 
 #if (PAYLOAD_ENCODER == 1) // format plain
 

@@ -1,6 +1,9 @@
 #include "globals.h"
 #include "payload.h"
 
+// initialize payload encoder
+PayloadConvert payload(PAYLOAD_BUFFER_SIZE);
+
 PayloadConvert::PayloadConvert(uint8_t size) {
   buffer = (uint8_t *)malloc(size);
   cursor = 0;
@@ -25,11 +28,6 @@ void PayloadConvert::addCount(uint16_t value, uint8_t snifftype) {
   buffer[cursor++] = lowByte(value);
 }
 
-void PayloadConvert::addAlarm(int8_t rssi, uint8_t msg) {
-  buffer[cursor++] = rssi;
-  buffer[cursor++] = msg;
-}
-
 void PayloadConvert::addVoltage(uint16_t value) {
   buffer[cursor++] = highByte(value);
   buffer[cursor++] = lowByte(value);
@@ -46,20 +44,21 @@ void PayloadConvert::addConfig(configData_t value) {
   buffer[cursor++] = lowByte(value.rssilimit);
   buffer[cursor++] = value.sendcycle;
   buffer[cursor++] = value.wifichancycle;
+  //buffer[cursor++] = value.wifichanmap;
   buffer[cursor++] = value.blescantime;
   buffer[cursor++] = value.blescan;
   buffer[cursor++] = value.wifiant;
-  buffer[cursor++] = value.vendorfilter;
-  buffer[cursor++] = value.rgblum;
+  buffer[cursor++] = highByte(value.sleepcycle);
+  buffer[cursor++] = lowByte(value.sleepcycle);
   buffer[cursor++] = value.payloadmask;
-  buffer[cursor++] = value.monitormode;
+  buffer[cursor++] = 0; // reserved
   memcpy(buffer + cursor, value.version, 10);
   cursor += 10;
 }
 
 void PayloadConvert::addStatus(uint16_t voltage, uint64_t uptime, float cputemp,
-                               uint32_t mem, uint8_t reset1, uint8_t reset2) {
-
+                               uint32_t mem, uint8_t reset0,
+                               uint32_t restarts) {
   buffer[cursor++] = highByte(voltage);
   buffer[cursor++] = lowByte(voltage);
   buffer[cursor++] = (byte)((uptime & 0xFF00000000000000) >> 56);
@@ -75,12 +74,15 @@ void PayloadConvert::addStatus(uint16_t voltage, uint64_t uptime, float cputemp,
   buffer[cursor++] = (byte)((mem & 0x00FF0000) >> 16);
   buffer[cursor++] = (byte)((mem & 0x0000FF00) >> 8);
   buffer[cursor++] = (byte)((mem & 0x000000FF));
-  buffer[cursor++] = (byte)(reset1);
-  buffer[cursor++] = (byte)(reset2);
+  buffer[cursor++] = (byte)(reset0);
+  buffer[cursor++] = (byte)((restarts & 0xFF000000) >> 24);
+  buffer[cursor++] = (byte)((restarts & 0x00FF0000) >> 16);
+  buffer[cursor++] = (byte)((restarts & 0x0000FF00) >> 8);
+  buffer[cursor++] = (byte)((restarts & 0x000000FF));
 }
 
 void PayloadConvert::addGPS(gpsStatus_t value) {
-#if(HAS_GPS)
+#if (HAS_GPS)
   buffer[cursor++] = (byte)((value.latitude & 0xFF000000) >> 24);
   buffer[cursor++] = (byte)((value.latitude & 0x00FF0000) >> 16);
   buffer[cursor++] = (byte)((value.latitude & 0x0000FF00) >> 8);
@@ -89,16 +91,18 @@ void PayloadConvert::addGPS(gpsStatus_t value) {
   buffer[cursor++] = (byte)((value.longitude & 0x00FF0000) >> 16);
   buffer[cursor++] = (byte)((value.longitude & 0x0000FF00) >> 8);
   buffer[cursor++] = (byte)((value.longitude & 0x000000FF));
+#if (!PAYLOAD_OPENSENSEBOX)
   buffer[cursor++] = value.satellites;
   buffer[cursor++] = highByte(value.hdop);
   buffer[cursor++] = lowByte(value.hdop);
   buffer[cursor++] = highByte(value.altitude);
   buffer[cursor++] = lowByte(value.altitude);
 #endif
+#endif
 }
 
 void PayloadConvert::addSensor(uint8_t buf[]) {
-#if(HAS_SENSORS)
+#if (HAS_SENSORS)
   uint8_t length = buf[0];
   memcpy(buffer, buf + 1, length);
   cursor += length; // length of buffer
@@ -106,7 +110,7 @@ void PayloadConvert::addSensor(uint8_t buf[]) {
 }
 
 void PayloadConvert::addBME(bmeStatus_t value) {
-#if(HAS_BME)
+#if (HAS_BME)
   int16_t temperature = (int16_t)(value.temperature); // float -> int
   uint16_t humidity = (uint16_t)(value.humidity);     // float -> int
   uint16_t pressure = (uint16_t)(value.pressure);     // float -> int
@@ -120,6 +124,16 @@ void PayloadConvert::addBME(bmeStatus_t value) {
   buffer[cursor++] = highByte(iaq);
   buffer[cursor++] = lowByte(iaq);
 #endif
+}
+
+void PayloadConvert::addSDS(sdsStatus_t sds) {
+#if (HAS_SDS011)
+  char tempBuffer[10 + 1];
+  sprintf(tempBuffer, ",%5.1f", sds.pm10);
+  addChars(tempBuffer, strlen(tempBuffer));
+  sprintf(tempBuffer, ",%5.1f", sds.pm25);
+  addChars(tempBuffer, strlen(tempBuffer));
+#endif // HAS_SDS011
 }
 
 void PayloadConvert::addButton(uint8_t value) {
@@ -149,11 +163,6 @@ void PayloadConvert::addCount(uint16_t value, uint8_t snifftype) {
   writeUint16(value);
 }
 
-void PayloadConvert::addAlarm(int8_t rssi, uint8_t msg) {
-  writeUint8(rssi);
-  writeUint8(msg);
-}
-
 void PayloadConvert::addVoltage(uint16_t value) { writeUint16(value); }
 
 void PayloadConvert::addConfig(configData_t value) {
@@ -162,45 +171,40 @@ void PayloadConvert::addConfig(configData_t value) {
   writeUint16(value.rssilimit);
   writeUint8(value.sendcycle);
   writeUint8(value.wifichancycle);
+  //writeUint8(value.wifichanmap);
   writeUint8(value.blescantime);
-  writeUint8(value.rgblum);
+  writeUint16(value.sleepcycle);
   writeBitmap(value.adrmode ? true : false, value.screensaver ? true : false,
               value.screenon ? true : false, value.countermode ? true : false,
-              value.blescan ? true : false, value.wifiant ? true : false,
-              value.vendorfilter ? true : false,
-              value.monitormode ? true : false);
-  writeBitmap(value.payloadmask && GPS_DATA ? true : false,
-              value.payloadmask && ALARM_DATA ? true : false,
-              value.payloadmask && MEMS_DATA ? true : false,
-              value.payloadmask && COUNT_DATA ? true : false,
-              value.payloadmask && SENSOR1_DATA ? true : false,
-              value.payloadmask && SENSOR2_DATA ? true : false,
-              value.payloadmask && SENSOR3_DATA ? true : false,
-              value.payloadmask && BATT_DATA ? true : false);
+              value.blescan ? true : false, value.wifiant ? true : false, 0, 0);
+  writeUint8(value.payloadmask);
   writeVersion(value.version);
 }
 
 void PayloadConvert::addStatus(uint16_t voltage, uint64_t uptime, float cputemp,
-                               uint32_t mem, uint8_t reset1, uint8_t reset2) {
+                               uint32_t mem, uint8_t reset0,
+                               uint32_t restarts) {
   writeUint16(voltage);
   writeUptime(uptime);
   writeUint8((byte)cputemp);
   writeUint32(mem);
-  writeUint8(reset1);
-  writeUint8(reset2);
+  writeUint8(reset0);
+  writeUint32(restarts);
 }
 
 void PayloadConvert::addGPS(gpsStatus_t value) {
-#if(HAS_GPS)
+#if (HAS_GPS)
   writeLatLng(value.latitude, value.longitude);
+#if (!PAYLOAD_OPENSENSEBOX)
   writeUint8(value.satellites);
   writeUint16(value.hdop);
   writeUint16(value.altitude);
 #endif
+#endif
 }
 
 void PayloadConvert::addSensor(uint8_t buf[]) {
-#if(HAS_SENSORS)
+#if (HAS_SENSORS)
   uint8_t length = buf[0];
   memcpy(buffer, buf + 1, length);
   cursor += length; // length of buffer
@@ -208,12 +212,19 @@ void PayloadConvert::addSensor(uint8_t buf[]) {
 }
 
 void PayloadConvert::addBME(bmeStatus_t value) {
-#if(HAS_BME)
+#if (HAS_BME)
   writeFloat(value.temperature);
   writePressure(value.pressure);
   writeUFloat(value.humidity);
   writeUFloat(value.iaq);
 #endif
+}
+
+void PayloadConvert::addSDS(sdsStatus_t sds) {
+#if (HAS_SDS011)
+  writeUint16((uint16_t)(sds.pm10 * 10));
+  writeUint16((uint16_t)(sds.pm25 * 10));
+#endif // HAS_SDS011
 }
 
 void PayloadConvert::addButton(uint8_t value) {
@@ -238,9 +249,7 @@ void PayloadConvert::uintToBytes(uint64_t value, uint8_t byteSize) {
   }
 }
 
-void PayloadConvert::writeUptime(uint64_t uptime) {
-  writeUint64(uptime);
-}
+void PayloadConvert::writeUptime(uint64_t uptime) { writeUint64(uptime); }
 
 void PayloadConvert::writeVersion(char *version) {
   memcpy(buffer + cursor, version, 10);
@@ -261,13 +270,9 @@ void PayloadConvert::writeUint16(uint16_t i) { uintToBytes(i, 2); }
 
 void PayloadConvert::writeUint8(uint8_t i) { uintToBytes(i, 1); }
 
-void PayloadConvert::writeUFloat(float value) {
-  writeUint16(value * 100);
-}
+void PayloadConvert::writeUFloat(float value) { writeUint16(value * 100); }
 
-void PayloadConvert::writePressure(float value) {
-  writeUint16(value * 10);
-}
+void PayloadConvert::writePressure(float value) { writeUint16(value * 10); }
 
 /**
  * Uses a 16bit two's complement with two decimals, so the range is
@@ -308,10 +313,32 @@ void PayloadConvert::writeBitmap(bool a, bool b, bool c, bool d, bool e, bool f,
 
 #elif ((PAYLOAD_ENCODER == 3) || (PAYLOAD_ENCODER == 4))
 
-void PayloadConvert::addByte(uint8_t value) { 
-  /* 
+void PayloadConvert::addByte(uint8_t value) {
+  /*
   not implemented
-  */ }
+  */
+}
+
+void PayloadConvert::addSDS(sdsStatus_t sds) {
+#if (HAS_SDS011)
+// value of PM10
+#if (PAYLOAD_ENCODER == 3) // Cayenne LPP dynamic
+  buffer[cursor++] = LPP_PARTMATTER10_CHANNEL; // for PM10
+#endif
+  buffer[cursor++] =
+      LPP_LUMINOSITY; // workaround since cayenne has no data type meter
+  buffer[cursor++] = highByte((uint16_t)(sds.pm10 * 10));
+  buffer[cursor++] = lowByte((uint16_t)(sds.pm10 * 10));
+// value of PM2.5
+#if (PAYLOAD_ENCODER == 3) // Cayenne LPP dynamic
+  buffer[cursor++] = LPP_PARTMATTER25_CHANNEL; // for PM2.5
+#endif
+  buffer[cursor++] =
+      LPP_LUMINOSITY; // workaround since cayenne has no data type meter
+  buffer[cursor++] = highByte((uint16_t)(sds.pm25 * 10));
+  buffer[cursor++] = lowByte((uint16_t)(sds.pm25 * 10));
+#endif // HAS_SDS011
+}
 
 void PayloadConvert::addCount(uint16_t value, uint8_t snifftype) {
   switch (snifftype) {
@@ -336,19 +363,6 @@ void PayloadConvert::addCount(uint16_t value, uint8_t snifftype) {
   }
 }
 
-void PayloadConvert::addAlarm(int8_t rssi, uint8_t msg) {
-#if (PAYLOAD_ENCODER == 3)
-  buffer[cursor++] = LPP_ALARM_CHANNEL;
-#endif
-  buffer[cursor++] = LPP_PRESENCE;
-  buffer[cursor++] = msg;
-#if (PAYLOAD_ENCODER == 3)
-  buffer[cursor++] = LPP_MSG_CHANNEL;
-#endif
-  buffer[cursor++] = LPP_ANALOG_INPUT;
-  buffer[cursor++] = rssi;
-}
-
 void PayloadConvert::addVoltage(uint16_t value) {
   uint16_t volt = value / 10;
 #if (PAYLOAD_ENCODER == 3)
@@ -368,7 +382,8 @@ void PayloadConvert::addConfig(configData_t value) {
 }
 
 void PayloadConvert::addStatus(uint16_t voltage, uint64_t uptime, float celsius,
-                               uint32_t mem, uint8_t reset1, uint8_t reset2) {
+                               uint32_t mem, uint8_t reset0,
+                               uint32_t restarts) {
   uint16_t temp = celsius * 10;
   uint16_t volt = voltage / 10;
 #if (defined BAT_MEASURE_ADC || defined HAS_PMU)
@@ -389,7 +404,7 @@ void PayloadConvert::addStatus(uint16_t voltage, uint64_t uptime, float celsius,
 }
 
 void PayloadConvert::addGPS(gpsStatus_t value) {
-#if(HAS_GPS)
+#if (HAS_GPS)
   int32_t lat = value.latitude / 100;
   int32_t lon = value.longitude / 100;
   int32_t alt = value.altitude * 100;
@@ -410,18 +425,18 @@ void PayloadConvert::addGPS(gpsStatus_t value) {
 }
 
 void PayloadConvert::addSensor(uint8_t buf[]) {
-#if(HAS_SENSORS)
-// to come
-/*
-  uint8_t length = buf[0];
-  memcpy(buffer, buf+1, length);
-  cursor += length; // length of buffer
-*/
+#if (HAS_SENSORS)
+  // to come
+  /*
+    uint8_t length = buf[0];
+    memcpy(buffer, buf+1, length);
+    cursor += length; // length of buffer
+  */
 #endif // HAS_SENSORS
 }
 
 void PayloadConvert::addBME(bmeStatus_t value) {
-#if(HAS_BME)
+#if (HAS_BME)
 
   // data value conversions to meet cayenne data type definition
   // 0.1°C per bit => -3276,7 .. +3276,7 °C
@@ -485,5 +500,9 @@ void PayloadConvert::addTime(time_t value) {
   buffer[cursor++] = (byte)((tx_period & 0x000000FF));
 #endif
 }
+#endif // PAYLOAD_ENCODER
 
-#endif
+void PayloadConvert::addChars(char *string, int len) {
+  for (int i = 0; i < len; i++)
+    addByte(string[i]);
+}

@@ -20,16 +20,13 @@
 #include <ArduinoJson.h>
 
 #include "BintrayClient.h"
-#include "BintrayCertificates.h"
+
 
 BintrayClient::BintrayClient(const String &user, const String &repository, const String &package)
     : m_user(user), m_repo(repository), m_package(package),
-      m_storage_host("dl.bintray.com"),
-      m_api_host("api.bintray.com")
+      m_storage_host("pax.express"),
+      m_api_host("pax.express")
 {
-    m_certificates.emplace_back("cloudfront.net", CLOUDFRONT_API_ROOT_CA);
-    m_certificates.emplace_back("akamai.bintray.com", BINTRAY_AKAMAI_ROOT_CA);
-    m_certificates.emplace_back("bintray.com", BINTRAY_API_ROOT_CA);
 }
 
 String BintrayClient::getUser() const
@@ -83,7 +80,7 @@ String BintrayClient::requestHTTPContent(const String &url) const
 {
     String payload;
     HTTPClient http;
-    http.begin(url, getCertificate(url));
+    http.begin(url);
     int httpCode = http.GET();
 
     if (httpCode > 0)
@@ -113,16 +110,17 @@ String BintrayClient::getLatestVersion() const
         ESP_LOGE(TAG, "Error: Firmware version data invalid.");
         return version;
     }
-    StaticJsonBuffer<bufferSize> jsonBuffer;
+    StaticJsonDocument<bufferSize> doc;
 
-    JsonObject &root = jsonBuffer.parseObject(jsonResult.c_str());
+    DeserializationError err = deserializeJson(doc, jsonResult.c_str());
+
     // Check for errors in parsing
-    if (!root.success())
+    if (err)
     {
-        ESP_LOGE(TAG, "Error: Firmware version data not found.");
+        ESP_LOGE(TAG, "Error %s: Firmware version data not found.", err.c_str());
         return version;
     }
-    return root.get<String>("name");
+    return doc["name"].as<String>();
 }
 
 String BintrayClient::getBinaryPath(const String &version) const
@@ -137,14 +135,15 @@ String BintrayClient::getBinaryPath(const String &version) const
         ESP_LOGE(TAG, "Error: Firmware download path data invalid.");
         return path;
     }
-    StaticJsonBuffer<bufferSize> jsonBuffer;
+    StaticJsonDocument<bufferSize> doc;
 
-    JsonArray &root = jsonBuffer.parseArray(jsonResult.c_str());
-    JsonObject &firstItem = root[0];
-    if (!root.success())
+    DeserializationError err = deserializeJson(doc, jsonResult.c_str());
+
+    JsonObject firstItem = doc[0];
+    if (err)
     { //Check for errors in parsing
-        ESP_LOGE(TAG, "Error: Firmware download path not found.");
+        ESP_LOGE(TAG, "Error %s: Firmware download path not found.", err.c_str());
         return path;
     }
-    return "/" + getUser() + "/" + getRepository() + "/" + firstItem.get<String>("path");
+    return "/" + getUser() + "/" + getRepository() + "/" + firstItem["path"].as<String>();
 }

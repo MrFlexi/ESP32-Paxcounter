@@ -10,7 +10,7 @@ function Decoder(bytes, port) {
     if (bytes.length >= 2) {
       decoded.wifi = (bytes[i++] << 8) | bytes[i++];
     }
-
+     
     if (bytes.length === 4 || bytes.length > 15) {
       decoded.ble = (bytes[i++] << 8) | bytes[i++];
     }
@@ -32,7 +32,7 @@ function Decoder(bytes, port) {
     decoded.temp = bytes[i++];
     decoded.memory = ((bytes[i++] << 24) | (bytes[i++] << 16) | (bytes[i++] << 8) | bytes[i++]);
     decoded.reset0 = bytes[i++];
-    decoded.reset1 = bytes[i++];
+    decoded.restarts = ((bytes[i++] << 24) | (bytes[i++] << 16) | (bytes[i++] << 8) | bytes[i++]);
   }
 
   if (port === 4) {
@@ -47,12 +47,6 @@ function Decoder(bytes, port) {
   if (port === 5) {
     var i = 0;
     decoded.button = bytes[i++];
-  }
-
-  if (port === 6) {
-    var i = 0;
-    decoded.rssi = bytes[i++];
-    decoded.beacon = bytes[i++];
   }
 
   if (port === 7) {
@@ -82,5 +76,13 @@ function Decoder(bytes, port) {
       decoded.timestatus = bytes[i++];
     }
   }
+
+  if (port === 10) {
+    var i = 0;
+    if (bytes.length >= 2) {
+      decoded.ens = (bytes[i++] << 8) | bytes[i++];
+    }
+  }
+
   return decoded;
 }

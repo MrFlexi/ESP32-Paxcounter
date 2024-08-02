@@ -2,10 +2,8 @@
 
 #include "bmesensor.h"
 
-// Local logging tag
-static const char TAG[] = __FILE__;
 
-bmeStatus_t bme_status = {0};
+bmeStatus_t bme_status = {0, 0, 0, 0, 0, 0, 0, 0};
 
 Ticker bmecycler;
 
@@ -26,93 +24,62 @@ bsec_virtual_sensor_t sensorList[10] = {
 };
 
 uint8_t bsecstate_buffer[BSEC_MAX_STATE_BLOB_SIZE] = {0};
-uint16_t stateUpdateCounter = 0;
 
 Bsec iaqSensor;
 
 #elif defined HAS_BME280
 
-Adafruit_BME280 bme; // I2C
-                     // Adafruit_BME280 bme(BME_CS); // hardware SPI
+Adafruit_BME280 bme; // using I2C interface
+
+// use these alternative constructors for other hw interface types
+// Adafruit_BME280 bme(BME_CS); // hardware SPI
 // Adafruit_BME280 bme(BME_CS, BME_MOSI, BME_MISO, BME_SCK); // software SPI
 
+#elif defined HAS_BMP180
+
+Adafruit_BMP085 bmp; // I2C
+
+#elif defined HAS_BMP280
+
+Adafruit_BMP280 bmp; // I2C
+
 #endif
 
-void bmecycle() { xTaskNotify(irqHandlerTask, BME_IRQ, eSetBits); }
+void setBMEIRQ() { xTaskNotify(irqHandlerTask, BME_IRQ, eSetBits); }
 
-// initialize BME680 sensor
+// initialize MEMS sensor
+// return = 0 -> error / return = 1 -> success
 int bme_init(void) {
-
-  // return = 0 -> error / return = 1 -> success
-  int rc = 1;
+  int rc = 0;
 
 #ifdef HAS_BME680
-  // block i2c bus access
-  if (I2C_MUTEX_LOCK()) {
+  Wire.begin(HAS_BME680);
+  iaqSensor.begin(BME680_ADDR, Wire);
 
-    Wire.begin(HAS_BME680);
-    iaqSensor.begin(BME680_ADDR, Wire);
+  ESP_LOGI(TAG, "BSEC v%d.%d.%d.%d", iaqSensor.version.major,
+           iaqSensor.version.minor, iaqSensor.version.major_bugfix,
+           iaqSensor.version.minor_bugfix);
 
-    ESP_LOGI(TAG, "BSEC v%d.%d.%d.%d", iaqSensor.version.major,
-             iaqSensor.version.minor, iaqSensor.version.major_bugfix,
-             iaqSensor.version.minor_bugfix);
+  iaqSensor.setConfig(bsec_config_iaq);
+  loadState();
+  iaqSensor.setTemperatureOffset((float)BME_TEMP_OFFSET);
+  iaqSensor.updateSubscription(sensorList, 10, BSEC_SAMPLE_RATE_LP);
 
-    iaqSensor.setConfig(bsec_config_iaq);
-
-    if (checkIaqSensorStatus())
-      ESP_LOGI(TAG, "BME680 sensor found and initialized");
-    else {
-      ESP_LOGE(TAG, "BME680 sensor not found");
-      rc = 0;
-      goto finish;
-    }
-
-    loadState();
-
-    iaqSensor.setTemperatureOffset((float)BME_TEMP_OFFSET);
-    iaqSensor.updateSubscription(sensorList, 10, BSEC_SAMPLE_RATE_LP);
-
-    if (checkIaqSensorStatus())
-      ESP_LOGI(TAG, "BSEC subscription succesful");
-    else {
-      ESP_LOGE(TAG, "BSEC subscription error");
-      rc = 0;
-      goto finish;
-    }
-  } else {
-    ESP_LOGE(TAG, "I2c bus busy - BME680 initialization error");
-    rc = 0;
-    goto finish;
-  }
+  rc = checkIaqSensorStatus();
 
 #elif defined HAS_BME280
-
-  bool status;
-
-  // block i2c bus access
-  if (I2C_MUTEX_LOCK()) {
-
-    status = bme.begin(BME280_ADDR);
-    if (!status) {
-      ESP_LOGE(TAG, "BME280 sensor not found");
-      rc = 0;
-      goto finish;
-    }
-    ESP_LOGI(TAG, "BME280 sensor found and initialized");
-  } else {
-    ESP_LOGE(TAG, "I2c bus busy - BME280 initialization error");
-    rc = 0;
-    goto finish;
-  }
-
+  rc = bme.begin(BME280_ADDR);
+#elif defined HAS_BMP180
+  // Wire.begin(21, 22);
+  rc = bmp.begin();
+#elif defined HAS_BMP280
+  // Wire.begin(21, 22);
+  rc = bmp.begin(BMP280_ADDR);
 #endif
 
-finish:
-  I2C_MUTEX_UNLOCK(); // release i2c bus access
   if (rc)
-    bmecycler.attach(BMECYCLE, bmecycle);
+    bmecycler.attach(BMECYCLE, setBMEIRQ); // start cyclic data transmit
   return rc;
-
 } // bme_init()
 
 #ifdef HAS_BME680
@@ -121,20 +88,20 @@ finish:
 int checkIaqSensorStatus(void) {
   int rslt = 1; // true = 1 = no error, false = 0 = error
 
-  if (iaqSensor.status != BSEC_OK) {
+  if (iaqSensor.bsecStatus != BSEC_OK) {
     rslt = 0;
-    if (iaqSensor.status < BSEC_OK)
-      ESP_LOGE(TAG, "BSEC error %d", iaqSensor.status);
+    if (iaqSensor.bsecStatus < BSEC_OK)
+      ESP_LOGE(TAG, "BSEC error %d", iaqSensor.bsecStatus);
     else
-      ESP_LOGW(TAG, "BSEC warning %d", iaqSensor.status);
+      ESP_LOGW(TAG, "BSEC warning %d", iaqSensor.bsecStatus);
   }
 
-  if (iaqSensor.bme680Status != BME680_OK) {
+  if (iaqSensor.bme68xStatus != BME68X_OK) {
     rslt = 0;
-    if (iaqSensor.bme680Status < BME680_OK)
-      ESP_LOGE(TAG, "BME680 error %d", iaqSensor.bme680Status);
+    if (iaqSensor.bme68xStatus < BME68X_OK)
+      ESP_LOGE(TAG, "BME680 error %d", iaqSensor.bme68xStatus);
     else
-      ESP_LOGW(TAG, "BME680 warning %d", iaqSensor.bme680Status);
+      ESP_LOGW(TAG, "BME680 warning %d", iaqSensor.bme68xStatus);
   }
 
   return rslt;
@@ -143,9 +110,7 @@ int checkIaqSensorStatus(void) {
 
 // store current BME sensor data in struct
 void bme_storedata(bmeStatus_t *bme_store) {
-
-  if ((cfg.payloadmask & MEMS_DATA) &&
-      (I2C_MUTEX_LOCK())) { // block i2c bus access
+  if (cfg.payloadmask & MEMS_DATA)
 
 #ifdef HAS_BME680
     if (iaqSensor.run()) { // if new data is available
@@ -157,22 +122,29 @@ void bme_storedata(bmeStatus_t *bme_store) {
           iaqSensor.humidity;           // humidity in % relative humidity x1000
       bme_store->pressure =             // pressure in Pascal
           (iaqSensor.pressure / 100.0); // conversion Pa -> hPa
-      bme_store->iaq = iaqSensor.iaqEstimate;
+      bme_store->iaq = iaqSensor.iaq;
       bme_store->iaq_accuracy = iaqSensor.iaqAccuracy;
       bme_store->gas = iaqSensor.gasResistance; // gas resistance in ohms
       updateState();
     }
 #elif defined HAS_BME280
     bme_store->temperature = bme.readTemperature();
-    bme_store->pressure = (bme.readPressure() / 100.0); // conversion Pa -> hPa
-    // bme.readAltitude(SEALEVELPRESSURE_HPA);
-    bme_store->humidity = bme.readHumidity();
-    bme_store->iaq = 0; // IAQ feature not present with BME280
+  bme_store->pressure = (bme.readPressure() / 100.0); // conversion Pa -> hPa
+  // bme.readAltitude(SEALEVELPRESSURE_HPA);
+  bme_store->humidity = bme.readHumidity();
+  bme_store->iaq = 0; // IAQ feature not present with BME280
+#elif defined HAS_BMP180
+    bme_store->temperature = bmp.readTemperature();
+  bme_store->pressure = (bmp.readPressure() / 100.0); // conversion Pa -> hPa
+  // bme.readAltitude(SEALEVELPRESSURE_HPA);
+  bme_store->iaq = 0; // IAQ feature not present with BME280
+#elif defined HAS_BMP280
+    bme_store->temperature = bmp.readTemperature();
+  bme_store->pressure = (bmp.readPressure() / 100.0); // conversion Pa -> hPa
+  // bme.readAltitude(SEALEVELPRESSURE_HPA);
+  bme_store->iaq = 0; // IAQ feature not present with BMP280
+
 #endif
-
-    I2C_MUTEX_UNLOCK(); // release i2c bus access
-  }
-
 } // bme_storedata()
 
 #ifdef HAS_BME680
@@ -190,6 +162,7 @@ void loadState(void) {
 
 void updateState(void) {
   bool update = false;
+  static uint16_t stateUpdateCounter = 0;
 
   if (stateUpdateCounter == 0) {
     // first state update when IAQ accuracy is >= 1
@@ -198,9 +171,8 @@ void updateState(void) {
       stateUpdateCounter++;
     }
   } else {
-
     /* Update every STATE_SAVE_PERIOD minutes */
-    if ((stateUpdateCounter * STATE_SAVE_PERIOD) < millis()) {
+    if ((long)(millis() - stateUpdateCounter * STATE_SAVE_PERIOD) >= 0) {
       update = true;
       stateUpdateCounter++;
     }
@@ -212,7 +184,7 @@ void updateState(void) {
     memcpy(cfg.bsecstate, bsecstate_buffer, BSEC_MAX_STATE_BLOB_SIZE);
     cfg.bsecstate[BSEC_MAX_STATE_BLOB_SIZE] = BSEC_MAX_STATE_BLOB_SIZE;
     ESP_LOGI(TAG, "saving BSEC state to NVRAM");
-    saveConfig();
+    saveConfig(false);
   }
 }
 #endif

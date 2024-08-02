@@ -1,3 +1,6 @@
+// Note: Don't build & run this code with loglevel debug!
+// It would crash for some unknown reason with stack canary error.
+
 #if (USE_OTA)
 
 /*
@@ -21,7 +24,9 @@
 
 using namespace std;
 
-const BintrayClient bintray(BINTRAY_USER, BINTRAY_REPO, BINTRAY_PACKAGE);
+const BintrayClient paxexpress(PAXEXPRESS_USER, PAXEXPRESS_REPO,
+                               PAXEXPRESS_PACKAGE);
+// usage of paxexpress: see https://github.com/paxexpress/docs
 
 // Connection port (HTTPS)
 const int port = 443;
@@ -30,8 +35,6 @@ const int port = 443;
 int volatile contentLength = 0;
 bool volatile isValidContentType = false;
 
-// Local logging tag
-static const char TAG[] = __FILE__;
 
 // helper function to extract header value from header
 inline String getHeaderValue(String header, String headerName) {
@@ -39,31 +42,46 @@ inline String getHeaderValue(String header, String headerName) {
 }
 
 void start_ota_update() {
+  const char *host = clientId;
 
   switch_LED(LED_ON);
 
 // init display
 #ifdef HAS_DISPLAY
-#ifndef DISPLAY_FLIP
-  oledInit(OLED_128x64, ANGLE_0, false, -1, -1, 400000L);
-#else
-  oledInit(OLED_128x64, ANGLE_FLIPY, false, -1, -1, 400000L);
-#endif
-  oledFill(0, 1);
-  dp_printf(0, 0, 0, 1, "SOFTWARE UPDATE");
-  dp_printf(0, 1, 0, 0, "WiFi connect  ..");
-  dp_printf(0, 2, 0, 0, "Has Update?   ..");
-  dp_printf(0, 3, 0, 0, "Fetching      ..");
-  dp_printf(0, 4, 0, 0, "Downloading   ..");
-  dp_printf(0, 5, 0, 0, "Rebooting     ..");
-  oledDumpBuffer(NULL);
+
+  dp_setup();
+  dp_setFont(MY_FONT_NORMAL);
+  dp->printf("SOFTWARE UPDATE\r\n");
+  dp->printf("WiFi connect  ..\r\n");
+  dp->printf("Has Update?   ..\r\n");
+  dp->printf("Fetching      ..\r\n");
+  dp->printf("Downloading   ..\r\n");
+  dp->printf("Rebooting     ..\r\n");
+  dp_dump();
 #endif
 
   ESP_LOGI(TAG, "Starting Wifi OTA update");
   ota_display(1, "**", WIFI_SSID);
 
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_MODE_NULL);
+  WiFi.setHostname(host);
   WiFi.mode(WIFI_STA);
+
+  // Connect to WiFi network
+  // workaround applied here to bypass WIFI_AUTH failure
+  // see https://github.com/espressif/arduino-esp32/issues/2501
+
+  // 1st try
   WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() == WL_DISCONNECTED) {
+    delay(2000);
+  }
+  // 2nd try
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    delay(2000);
+  }
 
   uint8_t i = WIFI_MAX_TRY;
   int ret = 1; // 0 = finished, 1 = retry, -1 = abort
@@ -71,7 +89,6 @@ void start_ota_update() {
   while (i--) {
     ESP_LOGI(TAG, "Trying to connect to %s, attempt %u of %u", WIFI_SSID,
              WIFI_MAX_TRY - i, WIFI_MAX_TRY);
-    delay(10000); // wait for stable connect
     if (WiFi.status() == WL_CONNECTED) {
       // we now have wifi connection and try to do an OTA over wifi update
       ESP_LOGI(TAG, "Connected to %s", WIFI_SSID);
@@ -86,6 +103,7 @@ void start_ota_update() {
       if (WiFi.status() == WL_CONNECTED)
         goto end; // OTA update finished or OTA max attemps reached
     }
+    delay(10000); // wait for stable connect
     WiFi.reconnect();
   }
 
@@ -100,13 +118,11 @@ end:
   ota_display(5, "**", ""); // mark line rebooting
   delay(5000);
   do_reset(false);
-
 } // start_ota_update
 
 // Reads data vom wifi client and flashes it to ota partition
 // returns: 0 = finished, 1 = retry, -1 = abort
 int do_ota_update() {
-
   char buf[17];
   bool redirect = true;
   size_t written = 0;
@@ -118,7 +134,7 @@ int do_ota_update() {
   if (WiFi.status() != WL_CONNECTED)
     return 1;
 
-  const String latest = bintray.getLatestVersion();
+  const String latest = paxexpress.getLatestVersion();
 
   if (latest.length() == 0) {
     ESP_LOGI(TAG, "Could not fetch info on latest firmware");
@@ -135,21 +151,20 @@ int do_ota_update() {
   ota_display(3, "**", "");
   if (WiFi.status() != WL_CONNECTED)
     return 1;
-  String firmwarePath = bintray.getBinaryPath(latest);
+  String firmwarePath = paxexpress.getBinaryPath(latest);
   if (!firmwarePath.endsWith(".bin")) {
     ESP_LOGI(TAG, "Unsupported binary format");
     ota_display(3, " E", "file type error");
     return -1;
   }
 
-  String currentHost = bintray.getStorageHost();
+  String currentHost = paxexpress.getStorageHost();
   String prevHost = currentHost;
 
   WiFiClientSecure client;
 
-  client.setCACert(bintray.getCertificate(currentHost));
   client.setTimeout(RESPONSE_TIMEOUT_MS);
-
+  client.setInsecure();
   if (!client.connect(currentHost.c_str(), port)) {
     ESP_LOGI(TAG, "Cannot connect to %s", currentHost.c_str());
     ota_display(3, " E", "connection lost");
@@ -159,7 +174,6 @@ int do_ota_update() {
   while (redirect) {
     if (currentHost != prevHost) {
       client.stop();
-      client.setCACert(bintray.getCertificate(currentHost));
       if (!client.connect(currentHost.c_str(), port)) {
         ESP_LOGI(TAG, "Redirect detected, but cannot connect to %s",
                  currentHost.c_str());
@@ -170,14 +184,15 @@ int do_ota_update() {
 
     ESP_LOGI(TAG, "Requesting %s", firmwarePath.c_str());
 
-    client.print(String("GET ") + firmwarePath + " HTTP/1.1\r\n");
-    client.print(String("Host: ") + currentHost + "\r\n");
-    client.print("Cache-Control: no-cache\r\n");
-    client.print("Connection: close\r\n\r\n");
+    client.println(String("GET " + firmwarePath + " HTTP/1.1"));
+    client.println(String("Host: " + currentHost));
+    client.println("Cache-Control: no-cache");
+    client.println("Connection: close");
+    client.println();
 
     unsigned long timeout = millis();
     while (client.available() == 0) {
-      if ((millis() - timeout) > (RESPONSE_TIMEOUT_MS)) {
+      if ((long)(millis() - timeout) > (RESPONSE_TIMEOUT_MS)) {
         ESP_LOGI(TAG, "Client timeout");
         ota_display(3, " E", "client timeout");
         goto abort;
@@ -186,6 +201,8 @@ int do_ota_update() {
 
     while (client.available()) {
       String line = client.readStringUntil('\n');
+      String lineLowerCase = line;
+      lineLowerCase.toLowerCase();
       // Check if the line is end of headers by removing space symbol
       line.trim();
       // if the the line is empty, this is the end of the headers
@@ -210,8 +227,8 @@ int do_ota_update() {
       }
 
       // Extracting new redirect location
-      if (line.startsWith("Location: ")) {
-        String newUrl = getHeaderValue(line, "Location: ");
+      if (lineLowerCase.startsWith("location: ")) {
+        String newUrl = getHeaderValue(line, "location: ");
         ESP_LOGI(TAG, "Got new url: %s", newUrl.c_str());
         newUrl.remove(0, newUrl.indexOf("//") + 2);
         currentHost = newUrl.substring(0, newUrl.indexOf('/'));
@@ -221,14 +238,14 @@ int do_ota_update() {
       }
 
       // Checking headers
-      if (line.startsWith("Content-Length: ")) {
+      if (lineLowerCase.startsWith("content-length: ")) {
         contentLength =
-            atoi((getHeaderValue(line, "Content-Length: ")).c_str());
+            atoi((getHeaderValue(line, "content-length: ")).c_str());
         ESP_LOGI(TAG, "Got %d bytes from server", contentLength);
       }
 
-      if (line.startsWith("Content-Type: ")) {
-        String contentType = getHeaderValue(line, "Content-Type: ");
+      if (lineLowerCase.startsWith("content-type: ")) {
+        String contentType = getHeaderValue(line, "content-type: ");
         ESP_LOGI(TAG, "Got %s payload", contentType.c_str());
         if (contentType == "application/octet-stream") {
           isValidContentType = true;
@@ -298,46 +315,30 @@ abort:
 
 retry:
   return 1;
-
 } // do_ota_update
 
 void ota_display(const uint8_t row, const std::string status,
                  const std::string msg) {
 #ifdef HAS_DISPLAY
-  dp_printf(112, row, 0, 0, status.substr(0, 2).c_str());
+  dp->setCursor(14 * 8, row * 8);
+  dp->printf(status.substr(0, 2).c_str());
   if (!msg.empty()) {
-    dp_printf(0, 7, 0, 0, "                ");
-    dp_printf(0, 7, 0, 0, msg.substr(0, 16).c_str());
+    dp->setCursor(0, 7 * 8);
+    dp->printf("                ");
+    dp->setCursor(0, 7 * 8);
+    dp->printf(msg.substr(0, 16).c_str());
   }
-  oledDumpBuffer(NULL);
+  dp_dump();
 #endif
 }
 
 // callback function to show download progress while streaming data
-static void show_progress(unsigned long current, unsigned long size) {
+void show_progress(unsigned long current, unsigned long size) {
 #ifdef HAS_DISPLAY
   char buf[17];
-  snprintf(buf, 17, "%-9lu (%3lu%%)", current, current * 100 / size);
+  snprintf(buf, 17, "%-9lu %3lu%%", current, current * 100 / size);
   ota_display(4, "**", buf);
 #endif
-}
-
-// helper function to convert strings into lower case
-bool comp(char s1, char s2) { return tolower(s1) < tolower(s2); }
-
-// helper function to lexicographically compare two versions. Returns 1 if v2 is
-// smaller, -1 if v1 is smaller, 0 if equal
-int version_compare(const String v1, const String v2) {
-
-  if (v1 == v2)
-    return 0;
-
-  const char *a1 = v1.c_str(), *a2 = v2.c_str();
-
-  if (lexicographical_compare(a1, a1 + strlen(a1), a2, a2 + strlen(a2), comp))
-    return -1;
-  else
-    return 1;
 }
 
 #endif // USE_OTA

@@ -18,6 +18,14 @@ function Decoder(bytes, port) {
         if (bytes.length === 4) {
             return decode(bytes, [uint16, uint16], ['wifi', 'ble']);
         }
+        // combined wifi counter and gps data, used by https://opensensemap.org
+        if (bytes.length === 10) {
+            return decode(bytes, [latLng, latLng, uint16], ['latitude', 'longitude', 'wifi']);
+        }
+        // combined wifi + ble counter and gps data, used by https://opensensemap.org
+        if (bytes.length === 12) {
+            return decode(bytes, [latLng, latLng, uint16, uint16], ['latitude', 'longitude', 'wifi', 'ble']);
+        }
         // combined wifi counter and gps data
         if (bytes.length === 15) {
             return decode(bytes, [uint16, latLng, latLng, uint8, hdop, altitude], ['wifi', 'latitude', 'longitude', 'sats', 'hdop', 'altitude']);
@@ -30,29 +38,28 @@ function Decoder(bytes, port) {
 
     if (port === 2) {
         // device status data
-        if (bytes.length === 17) {
-            return decode(bytes, [uint16, uptime, uint8, uint32, uint8, uint8], ['voltage', 'uptime', 'cputemp', 'memory', 'reset0', 'reset1']);
+        if (bytes.length === 20) {
+            return decode(bytes, [uint16, uptime, uint8, uint32, uint8, uint32], ['voltage', 'uptime', 'cputemp', 'memory', 'reset0', 'restarts']);
         }
     }
 
     if (port === 3) {
         // device config data      
-        return decode(bytes, [uint8, uint8, int16, uint8, uint8, uint8, uint8, bitmap1, bitmap2, version], ['loradr', 'txpower', 'rssilimit', 'sendcycle', 'wifichancycle', 'blescantime', 'rgblum', 'flags', 'payloadmask', 'version']);
+        return decode(bytes, [uint8, uint8, int16, uint8, uint8, uint8, uint16, bitmap1, bitmap2, version], ['loradr', 'txpower', 'rssilimit', 'sendcycle', 'wifichancycle', 'blescantime', 'sleepcycle', 'flags', 'payloadmask', 'version']);
     }
 
     if (port === 4) {
         // gps data      
-        return decode(bytes, [latLng, latLng, uint8, hdop, altitude], ['latitude', 'longitude', 'sats', 'hdop', 'altitude']);
+        if (bytes.length === 8) {
+            return decode(bytes, [latLng, latLng], ['latitude', 'longitude']);
+        } else {
+            return decode(bytes, [latLng, latLng, uint8, hdop, altitude], ['latitude', 'longitude', 'sats', 'hdop', 'altitude']);
+        }
     }
 
     if (port === 5) {
         // button pressed      
         return decode(bytes, [uint8], ['button']);
-    }
-
-    if (port === 6) {
-        // beacon proximity alarm      
-        return decode(bytes, [int8, uint8], ['rssi', 'beacon']);
     }
 
     if (port === 7) {
@@ -135,7 +142,7 @@ var int8 = function (bytes) {
     if (bytes.length !== int8.BYTES) {
         throw new Error('int8 must have exactly 1 byte');
     }
-	var value = +(bytesToInt(bytes));
+    var value = +(bytesToInt(bytes));
     if (value > 127) {
         value -= 256;
     }
@@ -147,7 +154,7 @@ var int16 = function (bytes) {
     if (bytes.length !== int16.BYTES) {
         throw new Error('int16 must have exactly 2 bytes');
     }
-	var value = +(bytesToInt(bytes));
+    var value = +(bytesToInt(bytes));
     if (value > 32767) {
         value -= 65536;
     }
@@ -159,7 +166,7 @@ var int32 = function (bytes) {
     if (bytes.length !== int32.BYTES) {
         throw new Error('int32 must have exactly 4 bytes');
     }
-	var value = +(bytesToInt(bytes));
+    var value = +(bytesToInt(bytes));
     if (value > 2147483647) {
         value -= 4294967296;
     }
@@ -231,7 +238,7 @@ var bitmap1 = function (byte) {
     }
     var i = bytesToInt(byte);
     var bm = ('00000000' + Number(i).toString(2)).substr(-8).split('').map(Number).map(Boolean);
-    return ['adr', 'screensaver', 'screen', 'countermode', 'blescan', 'antenna', 'filter', 'alarm']
+    return ['adr', 'screensaver', 'screen', 'countermode', 'blescan', 'antenna', 'reserved', 'reserved']
         .reduce(function (obj, pos, index) {
             obj[pos] = +bm[index];
             return obj;
@@ -245,7 +252,7 @@ var bitmap2 = function (byte) {
     }
     var i = bytesToInt(byte);
     var bm = ('00000000' + Number(i).toString(2)).substr(-8).split('').map(Number).map(Boolean);
-    return ['gps', 'alarm', 'bme', 'counter', 'sensor1', 'sensor2', 'sensor3', 'battery']
+    return ['battery', 'sensor3', 'sensor2', 'sensor1', 'gps', 'bme', 'reserved', 'counter']
         .reduce(function (obj, pos, index) {
             obj[pos] = +bm[index];
             return obj;

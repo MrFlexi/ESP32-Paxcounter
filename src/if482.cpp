@@ -14,7 +14,7 @@ IF482.cpp depends on code in RTCTIME.cpp.
 
 /*
 IF482 Generator to control clocks with IF482 telegram input (e.g. BÜRK BU190)
-   
+
 
 Example IF482 telegram: "OAL160806F170400"
 
@@ -81,34 +81,22 @@ not evaluated by model BU-190, use "F" instead for this model
 
 #include "if482.h"
 
-// Local logging tag
-static const char TAG[] = __FILE__;
 
-String IRAM_ATTR IF482_Frame(time_t printTime) {
+String IF482_Frame(time_t t) {
+  char mon, out[IF482_FRAME_SIZE + 1], buf[IF482_FRAME_SIZE - 3];
 
-  time_t t = myTZ.toLocal(printTime);
-  char mon, out[IF482_FRAME_SIZE + 1];
+  if (sntp_get_sync_status() == SNTP_SYNC_STATUS_IN_PROGRESS)
+    mon = 'M'; // time had been set but sync not completed
+  else
+    mon = 'A'; // time has been set and was recently synced
 
-  switch (timeStatus()) { // indicates if time has been set and recently synced
-  case timeSet:           // time is set and is synced
-    mon = 'A';
-    break;
-  case timeNeedsSync: // time had been set but sync attempt did not succeed
-    mon = 'M';
-    break;
-  default: // unknown time status (should never be reached)
-    mon = '?';
-    break;
-  } // switch
+  // generate IF482 telegram for local time
+  struct tm tt;
+  localtime_r(&t, &tt);
+  mktime(&tt);
+  strftime(buf, sizeof(buf), "%y%m%d%u%H%M%S", &tt);
+  snprintf(out, sizeof(out), "O%cL%s\r", mon, buf);
 
-  // generate IF482 telegram
-  snprintf(out, sizeof(out), "O%cL%02u%02u%02u%1u%02u%02u%02u\r", mon,
-           year(t) - 2000, month(t), day(t), weekday(t), hour(t), minute(t),
-           second(t));
-
-  t = myTZ.toLocal(now());
-  ESP_LOGD(TAG, "[%02d:%02d:%02d.%03d] IF482 = %s", hour(t), minute(t),
-           second(t), millisecond(), out);
   return out;
 }
 
